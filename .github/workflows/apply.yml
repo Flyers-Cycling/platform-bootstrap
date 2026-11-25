@@ -1,0 +1,51 @@
+name: apply
+
+# Runs after a merge to main. The `apply` environment requires Michael's
+# approval, so nothing is applied until he approves the run.
+on:
+  push:
+    branches: [main]
+    paths: ["terraform/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: apply
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TF_VAR_cloudflare_member_emails: ${{ secrets.CLOUDFLARE_MEMBER_EMAILS }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Club GitHub App token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CLUB_APP_ID }}
+          private-key: ${{ secrets.CLUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.10.6
+          tofu_wrapper: false
+      - run: tofu -chdir=terraform init -backend-config=backend.hcl
+      - name: Save a dated state copy (R2 has no versioning)
+        run: ./scripts/backup-state.sh
+      - name: Plan
+        env:
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+        run: tofu -chdir=terraform plan -no-color -lock-timeout=60s -out=tfplan
+      - name: Apply
+        env:
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+        run: tofu -chdir=terraform apply -no-color -lock-timeout=60s tfplan
